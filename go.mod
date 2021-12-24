@@ -1,3 +1,3 @@
-module csvp
+module manipulatedata
 
 go 1.16
