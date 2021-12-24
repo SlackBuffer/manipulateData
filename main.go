@@ -48,18 +48,40 @@ func extractColumns(w http.ResponseWriter, req *http.Request) {
 	ctx = context.WithValue(ctx, columnNumberKey, columnNumber)
 	defer cancel()
 
-	result, err := processZipFile(ctx, f, fh)
+	var buf *bytes.Buffer
+	err = doSlowWork(ctx, f, fh, func(mf multipart.File, mfh *multipart.FileHeader) error {
+		// time.Sleep(3 * time.Second)
+		result, err := processZipFile(ctx, f, fh)
+		if err != nil {
+			return err
+		}
+		buf, err = saveAsCSV(result)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
 	if err != nil {
-		jsonReply(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	buf, err := saveAsCSV(result)
-	if err != nil {
+		// TODO 细分 status code
 		jsonReply(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
 	// 聚合结果得到的 csv 以 .zip 的名字来命名
 	csvReply(w, fn, buf)
+}
+
+func doSlowWork(ctx context.Context, mf multipart.File, mfh *multipart.FileHeader, f func(mf multipart.File, mfh *multipart.FileHeader) error) error {
+	c := make(chan error, 1)
+	go func() { c <- f(mf, mfh) }()
+	select {
+	case <-ctx.Done():
+		<-c
+		return ctx.Err()
+	case err := <-c:
+		return err
+	}
 }
 
 func processZipFile(ctx context.Context, mf multipart.File, mfh *multipart.FileHeader) ([][]string, error) {
@@ -203,6 +225,22 @@ func saveAsCSV(data [][]string) (*bytes.Buffer, error) {
 		return nil, err
 	}
 	return &buf, nil
+}
+
+type ErrorWithCode struct {
+	Code    int
+	Message string
+}
+
+func (e *ErrorWithCode) Error() string {
+	return e.Message
+}
+
+func NewErrorC(code int, message string) *ErrorWithCode {
+	return &ErrorWithCode{
+		Code:    code,
+		Message: message,
+	}
 }
 
 type Response struct {
